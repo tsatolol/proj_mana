@@ -1,0 +1,9 @@
+# After the first apply, copy to backend.tf (git-ignored) and run:
+#   terraform init -migrate-state
+# The bootstrap state is kept in the stg state bucket under its own prefix.
+terraform {
+  backend "gcs" {
+    bucket = "proj-mana-stg-xxxx-tfstate"
+    prefix = "bootstrap"
+  }
+}

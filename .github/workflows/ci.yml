@@ -62,10 +62,12 @@ jobs:
         with:
           terraform_version: 1.16.5
       - run: terraform fmt -check -recursive
-      - run: terraform init -backend=false
+      - name: Validate bootstrap
+        working-directory: infra/terraform/bootstrap
+        run: terraform init -backend=false && terraform validate
+      - name: Validate envs/stg
         working-directory: infra/terraform/envs/stg
-      - run: terraform validate
-        working-directory: infra/terraform/envs/stg
+        run: terraform init -backend=false && terraform validate
 
   e2e:
     name: E2E (Playwright)

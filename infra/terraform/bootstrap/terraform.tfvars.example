@@ -1,0 +1,10 @@
+# Copy to terraform.tfvars (git-ignored) and fill in.
+billing_account = "XXXXXX-XXXXXX-XXXXXX"
+
+environments = {
+  stg = {
+    project_id = "proj-mana-stg-xxxx" # globally unique
+    name       = "proj_mana stg"
+  }
+  # prod = { project_id = "proj-mana-prod-xxxx", name = "proj_mana prod" }  # roadmap 9
+}
