@@ -3,6 +3,8 @@
 このファイルは Claude Code がこのリポジトリで作業する際の仕様・規約をまとめたものです。
 実装時はここに書かれた決定事項に従い、変更が必要な場合はこのファイルも合わせて更新してください。
 
+Next.js は学習データより新しいバージョン（16 系）を使っている。Next.js の API を使う前に `AGENTS.md` の指示どおり `node_modules/next/dist/docs/` の該当ガイドを確認すること。
+
 ---
 
 ## 1. プロダクト概要
@@ -20,11 +22,11 @@
 | 領域 | 採用技術 |
 | --- | --- |
 | 言語 | TypeScript（strict） |
-| フレームワーク | Next.js（App Router、`output: "standalone"`） |
-| UI | Tailwind CSS + shadcn/ui |
+| フレームワーク | Next.js 16（App Router、`output: "standalone"`） |
+| UI | Tailwind CSS v4 + shadcn/ui（style: `new-york`、base color: `neutral`） |
 | ドラッグ&ドロップ | dnd-kit（カンバン） |
-| DB | Cloud SQL for PostgreSQL |
-| ORM | Prisma |
+| DB | Cloud SQL for PostgreSQL 17 |
+| ORM | Prisma 7（`prisma-client` ジェネレーター + `@prisma/adapter-pg`） |
 | 認証 | Auth.js（NextAuth）+ Google プロバイダ、Prisma Adapter、DB セッション |
 | バリデーション | Zod |
 | ファイル保存 | Cloud Storage（署名付き URL でアップロード/ダウンロード） |
@@ -32,7 +34,7 @@
 | Slack 通知 | Incoming Webhook |
 | テスト | Vitest（ユニット/統合）、Playwright（E2E） |
 | パッケージ管理 | pnpm |
-| ランタイム | Node.js（Active LTS） |
+| ランタイム | Node.js（Active LTS。現在は 24 系、`.nvmrc` で管理） |
 | インフラ | Cloud Run、Cloud SQL、Cloud Storage、Secret Manager、Artifact Registry、Cloud Scheduler |
 | IaC | Terraform |
 | CI/CD | GitHub Actions + Workload Identity Federation |
@@ -114,14 +116,24 @@
 - ID は `cuid()`（Prisma のデフォルト）
 - 日時は `timestamptz`（UTC 保存、表示時に Asia/Tokyo に変換）。開始日・期限は `@db.Date`
 - 外部キーにはインデックスを張る。`Task` には `(projectId, status, position)` の複合インデックス
+- `Task.position` は `Float`（中間値を取るため）
+- `OrgSetting` は `id = 1` 固定の 1 行のみ
+- ユーザーは物理削除しないため、`User` への外部キーは `onDelete: Restrict`（担当者のみ `SetNull`）。プロジェクト削除時はタスク・コメント・添付が `Cascade` で消える
+
+### Prisma 7 の構成
+- 接続設定は `prisma.config.ts`（`.env.local` → `.env` の順に読み込む）。`schema.prisma` の datasource に `url` は書かない
+- Prisma Client は `src/generated/prisma` に生成（git 管理外）。`pnpm install` の postinstall と `pnpm db:generate` で生成する。import は `@/generated/prisma/client`
+- `prisma migrate dev` は Client を自動生成しないので、スキーマ変更後は `pnpm db:generate` も実行する
 
 ## 5. ディレクトリ構成（予定）
 
 ```
 proj_mana/
 ├── CLAUDE.md
-├── Dockerfile
+├── AGENTS.md                   # Next.js が管理するエージェント向け指示（next dev が再生成する）
+├── Dockerfile                  # runner（アプリ）/ migrate（マイグレーションジョブ）の 2 ターゲット
 ├── docker-compose.yml          # ローカル用 PostgreSQL
+├── prisma.config.ts            # Prisma CLI 設定（接続 URL、マイグレーション、シード）
 ├── prisma/
 │   ├── schema.prisma
 │   ├── migrations/
@@ -131,7 +143,7 @@ proj_mana/
 │   │   ├── (auth)/login/
 │   │   ├── (app)/projects/[projectId]/
 │   │   ├── (app)/settings/
-│   │   └── api/                # Auth.js、Cron 用内部エンドポイントなど
+│   │   └── api/                # Auth.js、Cron 用内部エンドポイント、ヘルスチェック（/api/health）など
 │   ├── components/
 │   │   └── ui/                 # shadcn/ui 生成物（手で大きく改変しない）
 │   ├── features/               # 機能単位（projects, tasks, comments, attachments, notifications, users）
@@ -140,7 +152,9 @@ proj_mana/
 │   │       ├── queries.ts      # 読み取り用関数
 │   │       ├── schema.ts       # Zod スキーマ
 │   │       └── components/
-│   └── lib/                    # db, auth, storage, mail, slack, authz などの共通処理
+│   ├── generated/prisma/       # Prisma Client（生成物、git 管理外）
+│   ├── lib/                    # db, auth, storage, mail, slack, authz などの共通処理
+│   └── test/                   # テスト用ヘルパー（DB リセットなど）
 ├── e2e/                        # Playwright
 ├── infra/
 │   └── terraform/
@@ -153,8 +167,10 @@ proj_mana/
 
 - **更新系は Server Actions**、読み取りは Server Components から `queries.ts` を呼ぶ。外部から叩く必要があるものだけ Route Handler（`app/api`）にする
 - **すべての Server Action / Route Handler の先頭で認可チェック**を行う（`requireUser()` / `requireAdmin()` を `src/lib/authz.ts` に用意）。UI でボタンを隠すだけにしない
+  - 例外はヘルスチェック（`/api/health`）のみ。稼働状態以外の情報は返さない
 - 入力は必ず Zod で検証する。スキーマは `features/<feature>/schema.ts` に置き、フォームとサーバーで共有する
 - Prisma Client は `src/lib/db.ts` のシングルトンを使う
+- shadcn/ui のコンポーネントは `pnpm dlx shadcn@latest add <name>` で `src/components/ui/` に追加する
 - 識別子・コードコメントは英語、UI 文言は日本語
 - `any` は使わない。やむを得ない場合は理由をコメントで残す
 - 秘密情報をコードやリポジトリに含めない。ローカルは `.env.local`（git 管理外）、`.env.example` にキー名のみ記載
@@ -189,8 +205,8 @@ proj_mana/
 
 ## 8. CI/CD（GitHub Actions）
 
-- `ci.yml`（PR / push）: `pnpm install` → `lint` → `typecheck` → `test` → `build`。E2E は PostgreSQL をサービスコンテナで起動して実行
-- `deploy-stg.yml`（`main` への push）: イメージをビルドして Artifact Registry に push → Cloud Run Job で `prisma migrate deploy` → Cloud Run にデプロイ
+- `ci.yml`（PR / `main` への push）: `pnpm install` → `lint` → `typecheck` → `test` → `build`。PostgreSQL はサービスコンテナで起動（DB テスト用）。E2E は別ジョブで、本番ビルド（standalone サーバー）に対して実行
+- `deploy-stg.yml`（`main` への push）: イメージをビルドして Artifact Registry に push → Cloud Run Job で `prisma migrate deploy`（Dockerfile の `migrate` ターゲット）→ Cloud Run にデプロイ
 - `deploy-prod.yml`（`v*` タグ push）: GitHub Environment `production` の承認（必須レビュアー）後、stg と同じ手順で prod にデプロイ
 - GCP 認証は Workload Identity Federation（サービスアカウントキーは発行しない）
 - マイグレーションは**デプロイ前に**実行する。破壊的変更（カラム削除・型変更）は「追加 → 移行 → 削除」の複数リリースに分ける
@@ -198,13 +214,16 @@ proj_mana/
 ## 9. よく使うコマンド
 
 ```bash
-docker compose up -d          # ローカル DB 起動
+docker compose up -d          # ローカル DB 起動（proj_mana と proj_mana_test を作成）
 pnpm dev                      # 開発サーバー
 pnpm lint                     # ESLint
-pnpm typecheck                # tsc --noEmit
-pnpm test                     # Vitest
-pnpm test:e2e                 # Playwright
+pnpm typecheck                # next typegen && tsc --noEmit
+pnpm test                     # Vitest（unit + db プロジェクト）
+pnpm test:e2e                 # Playwright（ローカルは dev サーバー、CI は standalone サーバー）
+pnpm build                    # 本番ビルド
+pnpm db:generate              # prisma generate
 pnpm db:migrate               # prisma migrate dev
+pnpm db:deploy                # prisma migrate deploy
 pnpm db:seed                  # シードデータ投入
 pnpm db:studio                # Prisma Studio
 ```
@@ -214,6 +233,10 @@ pnpm db:studio                # Prisma Studio
 ## 10. テスト方針
 
 - Vitest: Zod スキーマ、認可ロジック、Server Actions の主要パス（テスト用 DB を使用）、日付計算・並び順計算などの純粋関数
+  - Vitest は 2 プロジェクト構成。`unit`（`*.test.ts(x)`、DB 不要）と `db`（`*.db.test.ts`、実 DB を使用）
+  - `db` プロジェクトは `TEST_DATABASE_URL`（既定: ローカルの `proj_mana_test`）に接続し、開始時に `prisma migrate deploy` を実行する。DB 名が `_test` で終わらない場合は実行を拒否する
+  - テスト間のデータは `src/test/db.ts` の `resetDatabase()` で TRUNCATE して分離する
+  - コンポーネントのテストはファイル先頭に `// @vitest-environment jsdom` を付ける
 - Playwright: ログイン → プロジェクト作成 → タスク作成 → カンバンでステータス変更 → コメント投稿 の主要フロー
   - E2E では Google OAuth を使わず、テスト専用の認証バイパス（`NODE_ENV=test` 時のみ有効）でログインする
 - 認可のテストは必ず「Member が Admin 専用操作を実行できないこと」を含める
@@ -228,7 +251,7 @@ pnpm db:studio                # Prisma Studio
 
 ## 12. 開発ロードマップ
 
-1. **基盤**: Next.js プロジェクト作成、Tailwind / shadcn/ui、Prisma + ローカル DB、CI
+1. **基盤**: Next.js プロジェクト作成、Tailwind / shadcn/ui、Prisma + ローカル DB、CI ✅
 2. **認証**: Google ログイン、許可ドメイン / 招待、ロール、認可ヘルパー
 3. **インフラ**: Terraform で stg 環境構築、stg への自動デプロイ
 4. **プロジェクト・タスク**: CRUD、サブタスク、リスト表示
