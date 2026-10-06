@@ -20,6 +20,16 @@ pnpm db:seed                 # サンプルデータ投入（任意）
 pnpm dev                     # http://localhost:3000
 ```
 
+### Google ログインの設定
+
+1. Google Cloud Console の「API とサービス > 認証情報」で OAuth クライアント ID（ウェブ アプリケーション）を作成
+2. 承認済みのリダイレクト URI に `http://localhost:3000/api/auth/callback/google` を追加
+3. クライアント ID / シークレットを `.env.local` の `AUTH_GOOGLE_ID` / `AUTH_GOOGLE_SECRET` に設定
+4. `AUTH_SECRET` を `openssl rand -base64 32` で生成して設定
+5. `ALLOWED_EMAIL_DOMAINS`（ログインを許可するドメイン）と `INITIAL_ADMIN_EMAIL`（最初の管理者）を設定
+
+最初にログインしたユーザー、または `INITIAL_ADMIN_EMAIL` のユーザーが管理者になります。
+
 ## よく使うコマンド
 
 | コマンド | 内容 |
@@ -28,7 +38,7 @@ pnpm dev                     # http://localhost:3000
 | `pnpm lint` | ESLint |
 | `pnpm typecheck` | ルート型生成（`next typegen`）+ `tsc --noEmit` |
 | `pnpm test` | Vitest（unit + DB テスト。DB テストは `proj_mana_test` を使用） |
-| `pnpm test:e2e` | Playwright |
+| `pnpm test:e2e` | Playwright（`proj_mana_e2e` DB とポート 3100 の専用サーバーを使用） |
 | `pnpm build` | 本番ビルド（`output: "standalone"`） |
 | `pnpm db:migrate` | `prisma migrate dev` |
 | `pnpm db:deploy` | `prisma migrate deploy` |
