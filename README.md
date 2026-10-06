@@ -45,6 +45,10 @@ pnpm dev                     # http://localhost:3000
 | `pnpm db:seed` | シードデータ投入 |
 | `pnpm db:studio` | Prisma Studio |
 
+## インフラ
+
+GCP（Cloud Run / Cloud SQL など）は Terraform で管理しています。構築・運用手順は [infra/README.md](./infra/README.md) を参照してください。
+
 ## Docker イメージ
 
 ```bash

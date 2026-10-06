@@ -167,9 +167,10 @@ proj_mana/
 │   └── test/                   # テスト用ヘルパー（DB リセットなど）
 ├── e2e/                        # Playwright
 ├── infra/
+│   ├── README.md               # 初回構築手順・運用手順
 │   └── terraform/
-│       ├── modules/
-│       └── envs/{stg,prod}/
+│       ├── modules/app/        # 1 環境分のリソース一式（stg / prod 共通）
+│       └── envs/{stg,prod}/    # 環境ごとの値（prod はロードマップ 9）
 └── .github/workflows/
 ```
 
@@ -196,10 +197,22 @@ proj_mana/
 | stg | 動作確認 | Cloud SQL（最小構成） | `main` へのマージで自動 |
 | prod | 本番 | Cloud SQL（自動バックアップ + PITR 有効） | `v*` タグの push で実行（承認付き） |
 
-- GCP プロジェクトは stg / prod で分ける
+- GCP プロジェクトは stg / prod で分ける。構築・運用手順は `infra/README.md`
+- Terraform: 1.11 以上（CI は 1.16.5）、google プロバイダ 8 系。state は環境ごとの GCS バケット（手動で作成、`backend.hcl` で指定）
 - Cloud Run → Cloud SQL は Cloud SQL コネクタ（Unix ソケット `/cloudsql/<INSTANCE_CONNECTION_NAME>`）で接続
+  - `DATABASE_URL` は `postgresql://proj_mana:<pw>@localhost/proj_mana?host=/cloudsql/<接続名>`
+  - Cloud SQL はパブリック IP だが許可ネットワークなし、`connector_enforcement = REQUIRED`（VPC は使わない）
 - シークレット（DB パスワード、`AUTH_SECRET`、Google OAuth、Resend API キー、Slack Webhook）は Secret Manager に置き、Cloud Run の環境変数として注入
-- Cloud Run のサービスアカウントは環境ごとに専用のものを作り、最小権限（Cloud SQL Client、対象バケットのオブジェクト管理、Secret Accessor）を付与
+  - 値は Terraform の書き込み専用属性（`*_wo`）と ephemeral リソースで書き込み、tfstate に残さない。ローテーションは `*_version` 変数を上げる
+  - 現在作成しているのは `database-url` / `auth-secret` / `auth-google-secret`。Resend・Slack はロードマップ 8 で追加
+- Cloud Run のサービスアカウントは環境ごとに専用のものを作り、最小権限を付与
+  - `proj-mana-app`（実行）: Cloud SQL Client、シークレットごとの Secret Accessor、添付バケットのオブジェクト管理、自分自身への Token Creator（署名付き URL の signBlob 用）
+  - `proj-mana-migrate`（マイグレーションジョブ）: Cloud SQL Client、`database-url` の Secret Accessor のみ
+  - `proj-mana-deployer`（GitHub Actions）: Cloud Run Developer、Artifact Registry Writer（リポジトリ単位）、上記 2 つへの Service Account User
+- アプリの URL は Cloud Run の決定的 URL `https://proj-mana-<プロジェクト番号>.<region>.run.app`（`AUTH_URL`・OAuth リダイレクト URI・バケット CORS に使用）
+- Cloud Run の起動元 IAM チェックは無効（`invoker_iam_disabled`）。認証はアプリ（Auth.js）で行う
+- Cloud Run のイメージは GitHub Actions がデプロイし、Terraform はイメージの変更を無視する（初回はプレースホルダーのイメージ）
+- Cloud Scheduler はロードマップ 8 で追加
 
 ### 主な環境変数
 
@@ -219,7 +232,9 @@ proj_mana/
 ## 8. CI/CD（GitHub Actions）
 
 - `ci.yml`（PR / `main` への push）: `pnpm install` → `lint` → `typecheck` → `test` → `build`。PostgreSQL はサービスコンテナで起動（DB テスト用）。E2E は別ジョブで、本番ビルド（standalone サーバー）に対して実行
-- `deploy-stg.yml`（`main` への push）: イメージをビルドして Artifact Registry に push → Cloud Run Job で `prisma migrate deploy`（Dockerfile の `migrate` ターゲット）→ Cloud Run にデプロイ
+  - `terraform` ジョブで `terraform fmt -check` と `validate`（`envs/stg`）を実行
+- `deploy-stg.yml`（`main` への push 後、CI が成功したら `workflow_run` で起動。手動実行も可）: イメージ 2 種（`app` / `migrate`）をビルドして Artifact Registry に push → Cloud Run Job で `prisma migrate deploy`（Dockerfile の `migrate` ターゲット）→ Cloud Run にデプロイ → `/api/health` でスモークテスト
+  - リポジトリ変数 `STG_GCP_PROJECT_ID` / `STG_GCP_WORKLOAD_IDENTITY_PROVIDER` / `STG_GCP_DEPLOYER_SERVICE_ACCOUNT` を使う。`STG_GCP_PROJECT_ID` が未設定ならジョブはスキップ
 - `deploy-prod.yml`（`v*` タグ push）: GitHub Environment `production` の承認（必須レビュアー）後、stg と同じ手順で prod にデプロイ
 - GCP 認証は Workload Identity Federation（サービスアカウントキーは発行しない）
 - マイグレーションは**デプロイ前に**実行する。破壊的変更（カラム削除・型変更）は「追加 → 移行 → 削除」の複数リリースに分ける
@@ -270,7 +285,7 @@ pnpm db:studio                # Prisma Studio
 
 1. **基盤**: Next.js プロジェクト作成、Tailwind / shadcn/ui、Prisma + ローカル DB、CI ✅
 2. **認証**: Google ログイン、許可ドメイン / 招待、ロール、認可ヘルパー ✅
-3. **インフラ**: Terraform で stg 環境構築、stg への自動デプロイ
+3. **インフラ**: Terraform で stg 環境構築、stg への自動デプロイ（コード作成済み。GCP への適用は `infra/README.md` の手順で手動）
 4. **プロジェクト・タスク**: CRUD、サブタスク、リスト表示
 5. **カンバン**: ドラッグ&ドロップ、並び順
 6. **コメント・添付**: Markdown コメント、Cloud Storage 連携
