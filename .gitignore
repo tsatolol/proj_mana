@@ -35,3 +35,6 @@ e2e/.auth/
 
 # Terraform backend config (bucket name per environment)
 backend.hcl
+
+# Terraform bootstrap backend (created after the first apply)
+infra/terraform/bootstrap/backend.tf

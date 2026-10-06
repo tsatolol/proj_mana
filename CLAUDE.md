@@ -169,6 +169,7 @@ proj_mana/
 ├── infra/
 │   ├── README.md               # 初回構築手順・運用手順
 │   └── terraform/
+│       ├── bootstrap/          # GCP プロジェクト・課金紐付け・基本 API・tfstate バケット（全環境分）
 │       ├── modules/app/        # 1 環境分のリソース一式（stg / prod 共通）
 │       └── envs/{stg,prod}/    # 環境ごとの値（prod はロードマップ 9）
 └── .github/workflows/
@@ -198,7 +199,11 @@ proj_mana/
 | prod | 本番 | Cloud SQL（自動バックアップ + PITR 有効） | `v*` タグの push で実行（承認付き） |
 
 - GCP プロジェクトは stg / prod で分ける。構築・運用手順は `infra/README.md`
-- Terraform: 1.11 以上（CI は 1.16.5）、google プロバイダ 8 系。state は環境ごとの GCS バケット（手動で作成、`backend.hcl` で指定）
+- Terraform: 1.11 以上（CI は 1.16.5）、google プロバイダ 8 系、github プロバイダ 6 系
+  - `bootstrap/` が環境ごとの GCP プロジェクト（課金紐付け、`deletion_policy = "PREVENT"`）、基本 API、tfstate バケット（`<project>-tfstate`）を作る。bootstrap 自身の state は初回のみ手元に置き、stg の tfstate バケット（prefix `bootstrap`）へ移す
+  - `envs/<env>` の state はその環境の tfstate バケットに置き、`backend.hcl` で指定する
+  - 手作業で残るのは gcloud のログイン、Google OAuth クライアントの作成（対応する Terraform リソースがない）、シークレット（OAuth クライアントシークレット・`GITHUB_TOKEN`）を環境変数で渡すことだけ
+  - google プロバイダは `user_project_override` で API のクォータを環境のプロジェクトに付ける
 - Cloud Run → Cloud SQL は Cloud SQL コネクタ（Unix ソケット `/cloudsql/<INSTANCE_CONNECTION_NAME>`）で接続
   - `DATABASE_URL` は `postgresql://proj_mana:<pw>@localhost/proj_mana?host=/cloudsql/<接続名>`
   - Cloud SQL はパブリック IP だが許可ネットワークなし、`connector_enforcement = REQUIRED`（VPC は使わない）
@@ -232,9 +237,9 @@ proj_mana/
 ## 8. CI/CD（GitHub Actions）
 
 - `ci.yml`（PR / `main` への push）: `pnpm install` → `lint` → `typecheck` → `test` → `build`。PostgreSQL はサービスコンテナで起動（DB テスト用）。E2E は別ジョブで、本番ビルド（standalone サーバー）に対して実行
-  - `terraform` ジョブで `terraform fmt -check` と `validate`（`envs/stg`）を実行
+  - `terraform` ジョブで `terraform fmt -check` と `validate`（`bootstrap` / `envs/stg`）を実行
 - `deploy-stg.yml`（`main` への push 後、CI が成功したら `workflow_run` で起動。手動実行も可）: イメージ 2 種（`app` / `migrate`）をビルドして Artifact Registry に push → Cloud Run Job で `prisma migrate deploy`（Dockerfile の `migrate` ターゲット）→ Cloud Run にデプロイ → `/api/health` でスモークテスト
-  - リポジトリ変数 `STG_GCP_PROJECT_ID` / `STG_GCP_WORKLOAD_IDENTITY_PROVIDER` / `STG_GCP_DEPLOYER_SERVICE_ACCOUNT` を使う。`STG_GCP_PROJECT_ID` が未設定ならジョブはスキップ
+  - リポジトリ変数 `STG_GCP_PROJECT_ID` / `STG_GCP_WORKLOAD_IDENTITY_PROVIDER` / `STG_GCP_DEPLOYER_SERVICE_ACCOUNT` を使う（`envs/stg` の Terraform が登録）。`STG_GCP_PROJECT_ID` が未設定ならジョブはスキップ
 - `deploy-prod.yml`（`v*` タグ push）: GitHub Environment `production` の承認（必須レビュアー）後、stg と同じ手順で prod にデプロイ
 - GCP 認証は Workload Identity Federation（サービスアカウントキーは発行しない）
 - マイグレーションは**デプロイ前に**実行する。破壊的変更（カラム削除・型変更）は「追加 → 移行 → 削除」の複数リリースに分ける
