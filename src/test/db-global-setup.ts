@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 
-import { assertTestDatabaseUrl } from "./db";
+import { assertTestDatabaseUrl } from "./database-url";
 import { testDatabaseUrl } from "./env";
 
 // Applies migrations to the test database once before the db test project runs.

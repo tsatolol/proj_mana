@@ -59,16 +59,17 @@ jobs:
         env:
           POSTGRES_USER: proj_mana
           POSTGRES_PASSWORD: proj_mana
-          POSTGRES_DB: proj_mana_test
+          POSTGRES_DB: proj_mana_e2e
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U proj_mana -d proj_mana_test"
+          --health-cmd "pg_isready -U proj_mana -d proj_mana_e2e"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
     env:
-      DATABASE_URL: postgresql://proj_mana:proj_mana@localhost:5432/proj_mana_test
+      # Playwright global setup applies migrations and creates test users / sessions.
+      E2E_DATABASE_URL: postgresql://proj_mana:proj_mana@localhost:5432/proj_mana_e2e
     steps:
       - uses: actions/checkout@v5
       - uses: pnpm/action-setup@v4
@@ -78,7 +79,6 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec playwright install --with-deps chromium
-      - run: pnpm db:deploy
       - run: pnpm build
       - run: pnpm test:e2e
       - uses: actions/upload-artifact@v4

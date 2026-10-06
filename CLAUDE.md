@@ -27,7 +27,7 @@ Next.js は学習データより新しいバージョン（16 系）を使って
 | ドラッグ&ドロップ | dnd-kit（カンバン） |
 | DB | Cloud SQL for PostgreSQL 17 |
 | ORM | Prisma 7（`prisma-client` ジェネレーター + `@prisma/adapter-pg`） |
-| 認証 | Auth.js（NextAuth）+ Google プロバイダ、Prisma Adapter、DB セッション |
+| 認証 | Auth.js v5（`next-auth@5` beta）+ Google プロバイダ、Prisma Adapter、DB セッション |
 | バリデーション | Zod |
 | ファイル保存 | Cloud Storage（署名付き URL でアップロード/ダウンロード） |
 | メール | Resend |
@@ -47,8 +47,17 @@ Next.js は学習データより新しいバージョン（16 系）を使って
 - ログインできるのは以下のいずれかに該当するユーザーのみ
   - 環境変数 `ALLOWED_EMAIL_DOMAINS` に含まれるドメインのメールアドレス
   - Admin から招待（`Invitation`）されたメールアドレス
-- 初回ログイン時に `User` を作成。最初のユーザー、または `INITIAL_ADMIN_EMAIL` と一致するユーザーを Admin にする
+  - `INITIAL_ADMIN_EMAIL` のユーザーはドメインに関係なくログインできる
+  - ドメインは完全一致（`example.com` を許可しても `sub.example.com` は不可）。メールアドレスは小文字に正規化して扱う
+  - Google 側でメールアドレスが確認済み（`email_verified`）であることが前提
+- 初回ログイン時に `User` を作成。最初のユーザー、または `INITIAL_ADMIN_EMAIL` と一致するユーザーを Admin にする。招待経由の場合は招待のロールを使い、招待を承諾済み（`acceptedAt`）にする
+- 既存ユーザーは有効（`isActive`）な間だけログインできる。無効化されたユーザーは許可ドメインでもログイン不可
 - Admin はユーザーの招待・ロール変更・無効化ができる（物理削除はしない）
+  - 招待の有効期限は 7 日。同じメールアドレスへの再招待は既存の招待を更新する。登録済みユーザーは招待できない
+  - 招待メールは通知機能（ロードマップ 8）まで送らない。Admin がログイン URL を共有する
+  - Admin は自分自身のロール変更・無効化はできない（Admin が 0 人になるのを防ぐ）
+  - 無効化するとそのユーザーのセッションを削除し、即座にログアウトさせる
+- 実装: `src/lib/auth.ts`（Auth.js 設定）、`src/lib/auth-policy.ts`（ログイン可否・ロール決定）、`src/features/users/`（招待・ロール変更・無効化）、画面は `/login` と `/settings/users`
 
 ### 3.2 権限（ロール）
 組織全体で 2 種類のみ。プロジェクト単位の権限は持たない。
@@ -153,6 +162,7 @@ proj_mana/
 │   │       ├── schema.ts       # Zod スキーマ
 │   │       └── components/
 │   ├── generated/prisma/       # Prisma Client（生成物、git 管理外）
+│   ├── types/                  # 型拡張（next-auth の Session など）
 │   ├── lib/                    # db, auth, storage, mail, slack, authz などの共通処理
 │   └── test/                   # テスト用ヘルパー（DB リセットなど）
 ├── e2e/                        # Playwright
@@ -167,7 +177,10 @@ proj_mana/
 
 - **更新系は Server Actions**、読み取りは Server Components から `queries.ts` を呼ぶ。外部から叩く必要があるものだけ Route Handler（`app/api`）にする
 - **すべての Server Action / Route Handler の先頭で認可チェック**を行う（`requireUser()` / `requireAdmin()` を `src/lib/authz.ts` に用意）。UI でボタンを隠すだけにしない
-  - 例外はヘルスチェック（`/api/health`）のみ。稼働状態以外の情報は返さない
+  - `requireUser()` は未ログイン・無効化ユーザーを `/login` にリダイレクトする。`requireAdmin()` は加えて Admin 以外に `ForbiddenError` を投げる
+  - Admin 専用ページは `requireUser()` + `isAdmin()` で判定し、権限がなければ「権限がありません」と表示する（`forbidden()` は experimental のため使わない）
+  - 例外はヘルスチェック（`/api/health`）と Auth.js のエンドポイント（`/api/auth/*`）のみ
+- Server Action の戻り値は `src/lib/action-result.ts` の `ActionResult`。入力エラーなど想定内の失敗は返り値で返し、認可エラーは例外にする
 - 入力は必ず Zod で検証する。スキーマは `features/<feature>/schema.ts` に置き、フォームとサーバーで共有する
 - Prisma Client は `src/lib/db.ts` のシングルトンを使う
 - shadcn/ui のコンポーネントは `pnpm dlx shadcn@latest add <name>` で `src/components/ui/` に追加する
@@ -237,8 +250,12 @@ pnpm db:studio                # Prisma Studio
   - `db` プロジェクトは `TEST_DATABASE_URL`（既定: ローカルの `proj_mana_test`）に接続し、開始時に `prisma migrate deploy` を実行する。DB 名が `_test` で終わらない場合は実行を拒否する
   - テスト間のデータは `src/test/db.ts` の `resetDatabase()` で TRUNCATE して分離する
   - コンポーネントのテストはファイル先頭に `// @vitest-environment jsdom` を付ける
+  - Server Action のテストでは `@/lib/auth` の `auth()` と `next/cache` を `vi.mock` する（例: `src/features/users/actions.db.test.ts`）
 - Playwright: ログイン → プロジェクト作成 → タスク作成 → カンバンでステータス変更 → コメント投稿 の主要フロー
-  - E2E では Google OAuth を使わず、テスト専用の認証バイパス（`NODE_ENV=test` 時のみ有効）でログインする
+  - E2E では Google OAuth を使わない。`e2e/global-setup.ts` が E2E 用 DB にユーザーと DB セッションを直接作成し、Auth.js のセッション Cookie を storage state（`e2e/.auth/`、git 管理外）に書き出す。テストは `test.use({ storageState: AUTH_STATE.admin })` のようにロールを選ぶ
+  - アプリ側には認証バイパスのコードを置かない（本番ビルドでは `NODE_ENV` が `production` に固定され、`NODE_ENV=test` 判定は使えないため）
+  - E2E は専用 DB（`E2E_DATABASE_URL`、既定: `proj_mana_e2e`）とポート 3100 の専用サーバーで動かし、開発用 DB・開発サーバーには触れない
+  - セッションを消すテスト（ログアウトなど）や他ユーザーを変更するテストは、専用のテストユーザーを使い他のテストと干渉させない
 - 認可のテストは必ず「Member が Admin 専用操作を実行できないこと」を含める
 
 ## 11. Git 運用
@@ -252,7 +269,7 @@ pnpm db:studio                # Prisma Studio
 ## 12. 開発ロードマップ
 
 1. **基盤**: Next.js プロジェクト作成、Tailwind / shadcn/ui、Prisma + ローカル DB、CI ✅
-2. **認証**: Google ログイン、許可ドメイン / 招待、ロール、認可ヘルパー
+2. **認証**: Google ログイン、許可ドメイン / 招待、ロール、認可ヘルパー ✅
 3. **インフラ**: Terraform で stg 環境構築、stg への自動デプロイ
 4. **プロジェクト・タスク**: CRUD、サブタスク、リスト表示
 5. **カンバン**: ドラッグ&ドロップ、並び順
