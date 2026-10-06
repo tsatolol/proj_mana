@@ -1,0 +1,7 @@
+# Copy to terraform.tfvars (git-ignored) and fill in.
+project_id             = "proj-mana-stg"
+allowed_email_domains  = "example.com"
+initial_admin_email    = "you@example.com"
+google_oauth_client_id = "xxxxxxxx.apps.googleusercontent.com"
+# The client secret is passed via the TF_VAR_google_oauth_client_secret
+# environment variable, not this file.

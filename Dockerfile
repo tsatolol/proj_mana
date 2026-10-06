@@ -33,7 +33,8 @@ RUN pnpm build
 # ---------------------------------------------------------------------------
 FROM deps AS migrate
 USER node
-CMD ["pnpm", "exec", "prisma", "migrate", "deploy"]
+# Call the Prisma CLI directly so that corepack does not need to fetch pnpm at runtime.
+CMD ["node_modules/.bin/prisma", "migrate", "deploy"]
 
 # ---------------------------------------------------------------------------
 # Runtime

@@ -49,6 +49,24 @@ jobs:
       - run: pnpm test
       - run: pnpm build
 
+  terraform:
+    name: Terraform (fmt / validate)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: infra/terraform
+    steps:
+      - uses: actions/checkout@v5
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.16.5
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false
+        working-directory: infra/terraform/envs/stg
+      - run: terraform validate
+        working-directory: infra/terraform/envs/stg
+
   e2e:
     name: E2E (Playwright)
     runs-on: ubuntu-latest
